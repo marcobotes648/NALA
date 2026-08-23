@@ -1,0 +1,366 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NALA</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f4f6f8;color:#101828}
+header{background:#071426;color:white;padding:16px} .wrap{max-width:1000px;margin:auto;padding:16px}
+.logo{font-size:28px;font-weight:900;letter-spacing:5px} .sub{font-size:11px;color:#cbd5e1}
+.notice{padding:12px;border-radius:10px;margin-bottom:16px;background:#fff3cd}
+.ok{background:#e9f9ef} .err{background:#fdecec}
+.search{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}input{padding:12px;border:1px solid #ddd;border-radius:9px;flex:1;min-width:180px}
+button{padding:12px 16px;border:0;border-radius:9px;background:#071426;color:white;font-weight:bold}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.card{background:white;border:1px solid #e4e7ec;border-radius:14px;padding:16px}
+.price{font-size:20px;font-weight:900} .muted{color:#667085;font-size:13px}
+nav{display:flex;gap:5px;margin-top:12px;overflow:auto}nav button{background:#18283d;color:#ddd}nav button.active{background:#cda64e;color:#111}
+.hidden{display:none} table{width:100%;border-collapse:collapse;background:white}td,th{padding:10px;border-bottom:1px solid #eee;text-align:left}
+
+.account{max-width:520px;margin:20px auto}
+.userbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+</style></head>
+<body>
+<header><div class="wrap"><div class="logo">NALA</div><div class="sub">STAY · BOOK · EXPERIENCE</div>
+<div id="accountBar" style="margin-top:10px"></div><nav><button class="active" onclick="page('home',this)">Explore</button><button onclick="page('bookings',this)">Bookings</button><button onclick="page('partner',this)">Partner Portal</button><button onclick="page('partners',this)">Admin</button><button onclick="page('ai',this)">NALA AI</button></nav></div></header>
+<div class="wrap">
+<div id="status" class="notice">Connecting to NALA...</div>
+
+<section id="account" class="hidden">
+<div class="card account">
+<h2>NALA Account</h2>
+<div id="authForm"></div>
+</div>
+</section>
+<section id="home"><h1>Find your stay</h1><div class="search"><input id="search" placeholder="Search city or property"><button onclick="loadProperties()">Search</button></div><div id="cards" class="grid"></div></section>
+
+<section id="bookings" class="hidden"><h1>Bookings</h1><div id="bookingList"></div></section>
+<section id="partner" class="hidden">
+<h1>Partner Portal</h1>
+<div class="card" style="margin-bottom:15px"><h2>Register your property</h2>
+<p class="muted">This is the first partner workflow. Add a property, rooms and rates to NALA.</p>
+<div class="search">
+<input id="pn" placeholder="Property name"><input id="pc" placeholder="City"><input id="pr" type="number" placeholder="Nightly rate (ZAR)">
+<button onclick="registerPartner()">Submit property</button>
+</div></div>
+<div class="card" style="margin-bottom:15px"><h2>Your NALA properties</h2><div id="myProperties"></div></div>
+<div class="card"><h2>Partner bookings</h2><div id="partnerBookings"></div></div>
+</section>
+<section id="partners" class="hidden"><h1>NALA Admin</h1><button onclick="addProperty()">+ Add property</button><div id="partnerList" style="margin-top:15px"></div></section>
+<section id="ai" class="hidden"><h1>NALA AI Operations</h1><div id="stats" class="card"></div><h2>Approval queue</h2><div id="tasks"></div></section>
+</div>
+
+<script>
+const SUPABASE_URL = "https://pvkdgkvxzvxdaggugipx.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Ikq79CsbvfQmcIxdemIX_g_guw9VXC1";
+let properties=[], bookings=[], tasks=[];
+
+async function api(path, options={}){
+  const r=await fetch(SUPABASE_URL + "/rest/v1/" + path, {
+    ...options,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": "Bearer " + (localStorage.getItem("nala_access_token") || SUPABASE_KEY),
+      "Content-Type": "application/json",
+      ...(options.headers||{})
+    }
+  });
+  const text=await r.text();
+  if(!r.ok) throw new Error(r.status+" "+text);
+  return text ? JSON.parse(text) : [];
+}
+
+function status(msg, ok=false){
+  const e=document.getElementById("status"); e.textContent=msg; e.className="notice "+(ok?"ok":"err");
+}
+
+
+let currentUser = null;
+
+function acceptSupabaseRedirect(){
+  try{
+    const hash = window.location.hash ? window.location.hash.substring(1) : "";
+    if(!hash) return;
+    const params = new URLSearchParams(hash);
+    const access = params.get("access_token");
+    const refresh = params.get("refresh_token");
+    const type = params.get("type");
+    if(access){
+      localStorage.setItem("nala_access_token", access);
+      if(refresh) localStorage.setItem("nala_refresh_token", refresh);
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+      if(type === "signup" || type === "email_change" || type === "recovery"){
+        setTimeout(()=>alert("NALA: your email has been confirmed."), 200);
+      }
+    }
+  }catch(e){}
+}
+acceptSupabaseRedirect();
+
+
+async function refreshUser(){
+  const token = localStorage.getItem("nala_access_token");
+  if(!token){
+    currentUser = null;
+    renderAccountBar();
+    return;
+  }
+  try{
+    const r = await fetch(SUPABASE_URL + "/auth/v1/user", {
+      headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": "Bearer " + token
+      }
+    });
+    currentUser = r.ok ? await r.json() : null;
+    if(!currentUser) localStorage.removeItem("nala_access_token");
+  }catch(e){
+    currentUser = null;
+  }
+  renderAccountBar();
+}
+
+function renderAccountBar(){
+  const el = document.getElementById("accountBar");
+  if(!el) return;
+  if(currentUser){
+    el.innerHTML = '<div class="userbar"><span>Signed in as <b>' +
+      esc(currentUser.email || "Guest") +
+      '</b></span><button onclick="logout()">Logout</button></div>';
+  }else{
+    el.innerHTML = '<div class="userbar"><span class="muted">Not signed in</span>' +
+      '<button onclick="openAccount()">Login / Sign up</button></div>';
+  }
+}
+
+function openAccount(){
+  document.querySelectorAll("section").forEach(x => x.classList.add("hidden"));
+  document.getElementById("account").classList.remove("hidden");
+  showAuth("login");
+}
+
+function showAuth(mode){
+  const box = document.getElementById("authForm");
+  if(mode === "signup"){
+    box.innerHTML = `
+      <p class="muted">Create your free NALA guest account.</p>
+      <input id="authEmail" type="email" placeholder="Email">
+      <input id="authPassword" type="password" placeholder="Password (6+ characters)">
+      <button onclick="signup()">Create account</button>
+      <p><button onclick="showAuth('login')">Back to login</button></p>`;
+  }else{
+    box.innerHTML = `
+      <p class="muted">Sign in to your NALA account.</p>
+      <input id="authEmail" type="email" placeholder="Email">
+      <input id="authPassword" type="password" placeholder="Password">
+      <button onclick="login()">Login</button>
+      <p><button onclick="showAuth('signup')">Create account</button></p>`;
+  }
+}
+
+async function login(){
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value;
+  if(!email || !password){
+    alert("Enter your email and password.");
+    return;
+  }
+  try{
+    const r = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method:"POST",
+      headers:{
+        "apikey":SUPABASE_KEY,
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify({email,password})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.msg || d.error_description || d.message || "Login failed");
+    localStorage.setItem("nala_access_token", d.access_token);
+    await refreshUser();
+    alert("Logged in successfully.");
+    const firstNav = document.querySelector("nav button");
+    page("home", firstNav);
+  }catch(e){
+    alert(e.message);
+  }
+}
+
+async function signup(){
+  const email = document.getElementById("authEmail").value.trim();
+  const password = document.getElementById("authPassword").value;
+  if(!email || password.length < 6){
+    alert("Enter an email and a password of at least 6 characters.");
+    return;
+  }
+  try{
+    const r = await fetch(SUPABASE_URL + "/auth/v1/signup?redirect_to=" + encodeURIComponent(window.location.origin + window.location.pathname), {
+      method:"POST",
+      headers:{
+        "apikey":SUPABASE_KEY,
+        "Content-Type":"application/json"
+      },
+      body:JSON.stringify({email,password})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.msg || d.error_description || d.message || "Signup failed");
+    if(d.access_token) localStorage.setItem("nala_access_token", d.access_token);
+    await refreshUser();
+    alert(d.access_token ? "Account created and logged in." : "Account created. Check your email for confirmation.");
+    if(d.access_token){
+      const firstNav = document.querySelector("nav button");
+      page("home", firstNav);
+    }
+  }catch(e){
+    alert(e.message);
+  }
+}
+
+async function logout(){
+  const token = localStorage.getItem("nala_access_token");
+  try{
+    if(token){
+      await fetch(SUPABASE_URL + "/auth/v1/logout", {
+        method:"POST",
+        headers:{
+          "apikey":SUPABASE_KEY,
+          "Authorization":"Bearer " + token
+        }
+      });
+    }
+  }catch(e){}
+  localStorage.removeItem("nala_access_token");
+  currentUser = null;
+  renderAccountBar();
+}
+
+
+function localHostingNotice(){
+  if(location.protocol === "file:"){
+    const e=document.getElementById("status");
+    if(e){
+      e.textContent="NALA is connected, but email confirmation needs the online HTTPS version. Use the hosted NALA link for signup.";
+      e.className="notice err";
+    }
+  }
+}
+
+async function start(){
+  try {
+    await api("properties?select=id&limit=1");
+    status("✓ NALA is connected to Supabase.", true);
+    await loadProperties(); await loadBookings(); await loadTasks();
+  } catch(e) {
+    status("NALA could not reach the database: "+e.message);
+  }
+}
+
+async function loadProperties(){
+  try {
+    properties=await api("properties?select=*&active=eq.true&order=name");
+    const q=(document.getElementById("search").value||"").toLowerCase();
+    const list=properties.filter(p=>!q || (p.name||"").toLowerCase().includes(q) || (p.city||"").toLowerCase().includes(q));
+    document.getElementById("cards").innerHTML=list.map(p=>`
+      <div class="card"><h3>${esc(p.name)}</h3><div class="muted">${esc(p.city)} · ${esc(p.type||"Stay")}</div>
+      <p>${esc(p.amenities||"Wi-Fi")}</p><p><b class="price">R${Number(p.price||0).toFixed(2)}</b> / night</p>
+      <button onclick="book('${p.id}')">Book</button></div>`).join("") || "<p>No properties found.</p>";
+  } catch(e) { status("Connected, but properties could not load: "+e.message); }
+}
+
+async function book(id){
+  if(!currentUser){ openAccount(); alert("Please log in or create a NALA account before booking."); return; }
+  const p=properties.find(x=>x.id===id); if(!p)return;
+  const name=prompt("Guest name?"); if(!name)return;
+  const email=prompt("Guest email?")||"";
+  const date=prompt("Check-in date (YYYY-MM-DD)?",new Date().toISOString().slice(0,10)); if(!date)return;
+  const nights=Number(prompt("Number of nights?","1")||1);
+  try {
+    const data=await api("bookings",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({
+      property_id:id,guest_name:name,guest_email:email,check_in:date,nights:nights,guests:1,total_amount:Number(p.price)*nights,status:"confirmed"
+    })});
+    alert("Booking confirmed: "+data[0].booking_ref);
+    await loadBookings(); await loadTasks();
+  } catch(e) {alert("Booking failed: "+e.message);}
+}
+
+async function loadBookings(){
+  try {
+    bookings=await api("bookings?select=*,properties(name,city)&order=created_at.desc");
+    document.getElementById("bookingList").innerHTML=bookings.length?bookings.map(b=>`
+      <div class="card" style="margin:10px 0"><b>${esc(b.properties?.name||"NALA property")}</b>
+      <div class="muted">${esc(b.booking_ref)} · ${esc(b.check_in)} · ${b.nights} night(s)</div>
+      <p>${esc(b.guest_name)} · R${Number(b.total_amount||0).toFixed(2)} · ${esc(b.status)}</p></div>`).join(""):"<div class='card'>No bookings yet.</div>";
+  } catch(e){console.log(e)}
+}
+
+async function addProperty(){
+  const name=prompt("Property name?"); if(!name)return;
+  const city=prompt("City?")||"South Africa";
+  const price=Number(prompt("Nightly price in ZAR?","1000")||1000);
+  try {
+    await api("properties",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({name,city,price,rooms:5,type:"Guesthouse",amenities:"Wi-Fi",active:true})});
+    await api("ai_tasks",{method:"POST",body:JSON.stringify({title:"Approve new property",body:name+" is waiting for your approval.",status:"pending"})});
+    await loadProperties(); await loadTasks(); alert("Property added.");
+  } catch(e){alert("Could not add property: "+e.message);}
+}
+
+async function loadTasks(){
+  try {
+    tasks=await api("ai_tasks?select=*&order=created_at.desc");
+    document.getElementById("tasks").innerHTML=tasks.length?tasks.map(t=>`
+      <div class="card" style="margin:10px 0"><b>${esc(t.title)}</b><p class="muted">${esc(t.body)}</p><b>${esc(t.status)}</b>
+      ${t.status==="pending"?`<p><button onclick="resolveTask('${t.id}','approved')">Approve</button> <button onclick="resolveTask('${t.id}','rejected')">Reject</button></p>`:""}</div>`).join(""):"<div class='card'>No AI tasks.</div>";
+  } catch(e){console.log(e)}
+}
+
+async function resolveTask(id,s){
+  try{await api("ai_tasks?id=eq."+encodeURIComponent(id),{method:"PATCH",headers:{"Prefer":"return=minimal"},body:JSON.stringify({status:s})});await loadTasks();}catch(e){alert(e.message)}
+}
+
+
+async function registerPartner(){
+  const name=document.getElementById("pn").value.trim(), city=document.getElementById("pc").value.trim();
+  const price=Number(document.getElementById("pr").value||0);
+  if(!name||!city||!price){alert("Enter the property name, city and nightly rate.");return}
+  try{
+    await api("properties",{method:"POST",headers:{"Prefer":"return=minimal"},body:JSON.stringify({
+      name,city,price,rooms:1,type:"Guesthouse",amenities:"Wi-Fi",active:false
+    })});
+    document.getElementById("pn").value="";document.getElementById("pc").value="";document.getElementById("pr").value="";
+    alert("Property submitted to NALA. It now needs admin approval before it is published.");
+    await loadPartnerData();
+  }catch(e){alert("Could not submit property: "+e.message)}
+}
+async function loadPartnerData(){
+  try{
+    const all=await api("properties?select=*&order=created_at.desc");
+    document.getElementById("myProperties").innerHTML=all.length?all.map(x=>`
+      <div style="padding:12px;border-bottom:1px solid #eee"><b>${esc(x.name)}</b>
+      <div class="muted">${esc(x.city)} · R${Number(x.price||0).toFixed(2)} / night · ${x.active?"Published":"Awaiting approval"}</div></div>`).join(""):"No properties yet.";
+    const bs=await api("bookings?select=*,properties(name,city)&order=created_at.desc");
+    document.getElementById("partnerBookings").innerHTML=bs.length?bs.map(b=>`
+      <div style="padding:12px;border-bottom:1px solid #eee"><b>${esc(b.properties?.name||"Property")}</b>
+      <div class="muted">${esc(b.booking_ref)} · ${esc(b.check_in)} · ${b.nights} night(s)</div>
+      <div>${esc(b.guest_name)} · R${Number(b.total_amount||0).toFixed(2)} · ${esc(b.status)}</div></div>`).join(""):"No bookings yet.";
+  }catch(e){console.log(e)}
+}
+
+function page(id,btn){
+  document.querySelectorAll("section").forEach(x=>x.classList.add("hidden"));
+  document.getElementById(id).classList.remove("hidden");
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));btn.classList.add("active");
+  if(id==="partners") renderPartners();
+  if(id==="partner") loadPartnerData();
+  if(id==="ai") renderAI();
+}
+
+function renderPartners(){
+  document.getElementById("partnerList").innerHTML="<table><tr><th>Property</th><th>City</th><th>Rate</th><th>Rooms</th></tr>"+
+  properties.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.city)}</td><td>R${Number(p.price||0).toFixed(2)}</td><td>${p.rooms}</td></tr>`).join("")+"</table>";
+}
+function renderAI(){
+  const total=bookings.reduce((a,b)=>a+Number(b.total_amount||0),0);
+  document.getElementById("stats").innerHTML="<b>"+bookings.length+"</b> bookings · <b>"+properties.length+"</b> properties · <b>R"+total.toFixed(2)+"</b> booking value · <b>"+tasks.filter(t=>t.status==="pending").length+"</b> pending decisions";
+}
+function esc(x){return String(x??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+refreshUser().then(start); localHostingNotice();
+</script></body></html>
