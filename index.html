@@ -67,7 +67,7 @@ nav{display:flex;gap:5px;margin-top:12px;overflow:auto}nav button{background:#18
 <div class="nbm-head"><div><h2 id="nbmTitle" style="margin:0">Book your stay</h2><div id="nbmLocation" class="muted"></div></div><button class="nbm-close" onclick="closeNalaBooking()">✕</button></div>
 <div id="nbmDescription" class="muted" style="margin:14px 0"></div>
 <div class="nbm-grid">
-<div><label>Room</label><select id="nbmRoom"></select></div><div><label>Guests</label><input id="nbmGuests" type="number" min="1" value="1"></div>
+<div><label>Room</label><select id="nbmRoom"><option value="standard">Standard room</option></select></div><div><label>Guests</label><input id="nbmGuests" type="number" min="1" value="1"></div>
 <div><label>Check-in</label><input id="nbmCheckin" type="date"></div><div><label>Nights</label><input id="nbmNights" type="number" min="1" value="1"></div>
 <div><label>Guest name</label><input id="nbmName" type="text"></div><div><label>Email</label><input id="nbmEmail" type="email" readonly></div>
 </div>
@@ -218,20 +218,14 @@ async function openNalaBooking(propertyId){
     if(!p){alert("Property not found.");return}
     nalaBookingProperty=p;
     nalaSetBookMessage("");
-    nalaBookingRooms=await api("rooms?select=*&property_id=eq."+encodeURIComponent(propertyId)+"&active=eq.true&order=price");
-    if(!Array.isArray(nalaBookingRooms)||!nalaBookingRooms.length){
-      alert("This property has no active rooms yet. Add a room in the Admin/Partner area first.");
-      return;
-    }
+    // NALA V1 uses the property's room inventory directly. No separate rooms table is required.
+    nalaBookingRooms=[{id:"standard",name:"Standard room",price:Number(p.price||0)}];
     const sel=document.getElementById("nbmRoom");
-    sel.innerHTML=nalaBookingRooms.map((r,i)=>{
-      const label=r.name||r.room_name||r.title||("Room "+(i+1));
-      return `<option value="${esc(String(r.id))}">${esc(label)} — R${Number(r.price||p.price||0).toFixed(2)} / night</option>`;
-    }).join("");
+    sel.innerHTML=`<option value="standard">Standard room — R${Number(p.price||0).toFixed(2)} / night</option>`;
     document.getElementById("nbmTitle").textContent="Book "+(p.name||"your stay");
     document.getElementById("nbmLocation").textContent=(p.city||"")+" · "+(p.type||"Stay");
-    document.getElementById("nbmDescription").textContent=p.description||p.amenities||"Choose your room and dates.";
-    document.getElementById("nbmName").value=(typeof currentProfile!=="undefined"&&currentProfile?.full_name)||currentUser.email.split("@")[0];
+    document.getElementById("nbmDescription").textContent=p.description||p.amenities||"Choose your dates and confirm your stay.";
+    document.getElementById("nbmName").value=(currentProfile?.full_name)||currentUser.email.split("@")[0];
     document.getElementById("nbmEmail").value=currentUser.email;
     const d=new Date();d.setDate(d.getDate()+1);
     document.getElementById("nbmCheckin").value=nalaDateString(d);
@@ -240,50 +234,63 @@ async function openNalaBooking(propertyId){
     document.getElementById("nbmNights").value=1;
     document.getElementById("nalaBookModal").style.display="flex";
     nalaUpdateTotal();
-  }catch(e){
-    alert("Could not open booking: "+(e?.message||e));
-  }
+  }catch(e){alert("Could not open booking: "+(e?.message||e))}
 }
+
 async function confirmNalaBooking(){
-  if(!currentUser||!nalaBookingProperty)return;
-  const room=nalaBookingRooms.find(r=>String(r.id)===String(document.getElementById("nbmRoom").value));
-  const name=document.getElementById("nbmName").value.trim();
-  const date=document.getElementById("nbmCheckin").value;
-  const nights=Math.max(1,Number(document.getElementById("nbmNights").value||1));
-  const guests=Math.max(1,Number(document.getElementById("nbmGuests").value||1));
-  if(!room||!name||!date){nalaSetBookMessage("Please complete the booking details.");return}
-  const btn=document.getElementById("nbmConfirm");btn.disabled=true;btn.textContent="Checking availability…";
-  try{
-    const existing=await api("bookings?select=room_id,check_in,nights,status&room_id=eq."+encodeURIComponent(room.id));
-    const start=new Date(date+"T00:00:00").getTime(),end=start+nights*86400000;
-    const blocked=(existing||[]).some(b=>{
-      if(["cancelled","rejected"].includes(String(b.status||"").toLowerCase()))return false;
-      if(!b.check_in)return false;
-      const bs=new Date(String(b.check_in).slice(0,10)+"T00:00:00").getTime();
-      const be=bs+Math.max(1,Number(b.nights||1))*86400000;
-      return start<be&&end>bs;
-    });
-    if(blocked){nalaSetBookMessage("That room is not available for those dates.");return}
-    btn.textContent="Confirming…";
-    const total=Number(room.price||nalaBookingProperty.price||0)*nights;
-    const data=await api("bookings",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({
-      property_id:nalaBookingProperty.id,room_id:room.id,guest_id:currentUser.id,
-      guest_name:name,guest_email:currentUser.email,check_in:date,nights:nights,
-      guests:guests,total_amount:total,status:"confirmed"
-    })});
-    const ref=data?.[0]?.booking_ref||data?.[0]?.id||"confirmed";
-    nalaSetBookMessage("Booking confirmed! Reference: "+ref,true);
-    setTimeout(()=>{closeNalaBooking();loadBookings();},900);
-  }catch(e){
-    nalaSetBookMessage("Booking failed: "+(e?.message||e));
-  }finally{
-    btn.disabled=false;btn.textContent="Confirm booking";
-  }
+ if(!currentUser||!nalaBookingProperty)return;
+ const name=document.getElementById("nbmName").value.trim();
+ const date=document.getElementById("nbmCheckin").value;
+ const nights=Math.max(1,Number(document.getElementById("nbmNights").value||1));
+ const guests=Math.max(1,Number(document.getElementById("nbmGuests").value||1));
+ const price=Number(nalaBookingProperty.price||0);
+ const inventory=Math.max(1,Number(nalaBookingProperty.rooms||1));
+ if(!name||!date){nalaSetBookMessage("Please complete the booking details.");return}
+ const btn=document.getElementById("nbmConfirm");btn.disabled=true;btn.textContent="Checking availability…";
+ try{
+   const existing=await api("bookings?select=check_in,nights,status&property_id=eq."+encodeURIComponent(nalaBookingProperty.id));
+   const startMs=new Date(date+"T00:00:00").getTime(), endMs=startMs+nights*86400000;
+   const active=(existing||[]).filter(b=>!["cancelled","rejected"].includes(String(b.status||"").toLowerCase()));
+   const overlapping=active.filter(b=>{
+     if(!b.check_in)return false;
+     const bs=new Date(String(b.check_in).slice(0,10)+"T00:00:00").getTime();
+     const be=bs+Math.max(1,Number(b.nights||1))*86400000;
+     return startMs<be && endMs>bs;
+   });
+   if(overlapping.length>=inventory){nalaSetBookMessage("That property is fully booked for those dates. Please choose different dates.");return}
+   btn.textContent="Confirming…";
+   const total=price*nights;
+   const data=await api("bookings",{
+     method:"POST",
+     headers:{"Prefer":"return=representation"},
+     body:JSON.stringify({
+       property_id:nalaBookingProperty.id,
+       guest_id:currentUser.id,
+       guest_name:name,
+       guest_email:currentUser.email,
+       check_in:date,
+       nights:nights,
+       guests:guests,
+       total_amount:total,
+       status:"confirmed"
+     })
+   });
+   const ref=data?.[0]?.booking_ref||data?.[0]?.id||"confirmed";
+   nalaSetBookMessage("Booking confirmed! Reference: "+ref,true);
+   setTimeout(()=>{closeNalaBooking();loadBookings();},900);
+ }catch(e){
+   nalaSetBookMessage("Booking failed: "+(e?.message||e));
+ }finally{
+   btn.disabled=false;btn.textContent="Confirm booking";
+ }
 }
 
 async function loadBookings(){
  if(!currentUser){bookingList.innerHTML="<div class='card'>Log in to see your bookings.</div>";return}
- try{bookings=await api("bookings?select=*,properties(name,city)&guest_id=eq."+currentUser.id+"&order=created_at.desc");bookingList.innerHTML=bookings.length?bookings.map(b=>`<div class="card" style="margin:10px 0"><b>${esc(b.properties?.name||"Property")}</b><div class="muted">${esc(b.booking_ref)} · ${esc(b.check_in)} · ${b.nights} night(s)</div><p>${esc(b.room_name||"Room")} · R${Number(b.total_amount||0).toFixed(2)} · <span class="pill">${esc(b.status)}</span></p></div>`).join(""):"<div class='card'>No bookings yet.</div>"}catch(e){bookingList.innerHTML="<div class='card'>"+esc(e.message)+"</div>"}
+ try{
+  bookings=await api("bookings?select=*,properties(name,city)&guest_id=eq."+encodeURIComponent(currentUser.id)+"&order=created_at.desc");
+  bookingList.innerHTML=bookings.length?bookings.map(b=>`<div class="card" style="margin:10px 0"><b>${esc(b.properties?.name||"Property")}</b><div class="muted">${esc(b.booking_ref||b.id)} · ${esc(b.check_in)} · ${b.nights} night(s)</div><p>Standard room · R${Number(b.total_amount||0).toFixed(2)} · <span class="pill">${esc(b.status)}</span></p></div>`).join(""):"<div class='card'>No bookings yet.</div>"
+ }catch(e){bookingList.innerHTML="<div class='card'>"+esc(e.message)+"</div>"}
 }
 
 function renderNav(){
@@ -304,7 +311,7 @@ async function registerPartner(){
  if(!name||!city||!price)return alert("Enter property name, city and nightly rate.");
  try{
   const d=await api("properties",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({name,city,price,rooms:roomsCount,type:"Guesthouse",amenities:"Wi-Fi",active:false,approval_status:"pending",owner_id:currentUser.id,owner_name:currentProfile?.full_name||"",owner_email:currentUser.email,address:pa.value,phone:pphone.value,description:pdesc.value,commission_rate:Number(settings.commission_rate||15)})});
-  const prop=d[0];await api("rooms",{method:"POST",body:JSON.stringify({property_id:prop.id,name:"Standard Room",description:"Standard room",max_guests:2,price,inventory:roomsCount,active:true})});
+  const prop=d[0];
   alert("Submitted. NALA will keep it offline until an admin approves it.");await loadPartner();
  }catch(e){alert("Could not submit property: "+e.message)}
 }
