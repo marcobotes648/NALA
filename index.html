@@ -175,7 +175,7 @@ async function book(propertyId){
 
 async function loadBookings(){
  if(!currentUser){bookingList.innerHTML="<div class='card'>Log in to see your bookings.</div>";return}
- try{bookings=await api("bookings?select=*,properties(name,city),rooms(name)&guest_id=eq."+currentUser.id+"&order=created_at.desc");bookingList.innerHTML=bookings.length?bookings.map(b=>`<div class="card" style="margin:10px 0"><b>${esc(b.properties?.name||"Property")}</b><div class="muted">${esc(b.booking_ref)} · ${esc(b.check_in)} · ${b.nights} night(s)</div><p>${esc(b.rooms?.name||"Room")} · R${Number(b.total_amount||0).toFixed(2)} · <span class="pill">${esc(b.status)}</span></p></div>`).join(""):"<div class='card'>No bookings yet.</div>"}catch(e){bookingList.innerHTML="<div class='card'>"+esc(e.message)+"</div>"}
+ try{bookings=await api("bookings?select=*,properties(name,city)&guest_id=eq."+currentUser.id+"&order=created_at.desc");bookingList.innerHTML=bookings.length?bookings.map(b=>`<div class="card" style="margin:10px 0"><b>${esc(b.properties?.name||"Property")}</b><div class="muted">${esc(b.booking_ref)} · ${esc(b.check_in)} · ${b.nights} night(s)</div><p>${esc(b.room_name||"Room")} · R${Number(b.total_amount||0).toFixed(2)} · <span class="pill">${esc(b.status)}</span></p></div>`).join(""):"<div class='card'>No bookings yet.</div>"}catch(e){bookingList.innerHTML="<div class='card'>"+esc(e.message)+"</div>"}
 }
 
 function renderNav(){
@@ -204,7 +204,7 @@ async function loadPartner(){
  if(!isPartner())return;partnerContent.classList.remove("hidden");partnerGate.innerHTML="";
  const all=await api("properties?select=*&owner_id=eq."+currentUser.id+"&order=created_at.desc");
  myProperties.innerHTML=all.length?all.map(x=>`<div class="card" style="margin:8px 0"><b>${esc(x.name)}</b><div class="muted">${esc(x.city)} · R${Number(x.price).toFixed(2)} · ${esc(x.approval_status)}</div><p>${esc(x.description||"")}</p></div>`).join(""):"No properties yet.";
- const bs=await api("bookings?select=*,properties(name,city),rooms(name)&order=created_at.desc");const mine=bs.filter(b=>all.some(p=>p.id===b.property_id));
+ const bs=await api("bookings?select=*,properties(name,city)&order=created_at.desc");const mine=bs.filter(b=>all.some(p=>p.id===b.property_id));
  partnerBookings.innerHTML=mine.length?mine.map(b=>`<div style="padding:10px;border-bottom:1px solid #eee"><b>${esc(b.properties?.name)}</b> · ${esc(b.booking_ref)} · R${Number(b.total_amount).toFixed(2)} · NALA R${Number(b.commission_amount).toFixed(2)}</div>`).join(""):"No bookings yet.";
 }
 
