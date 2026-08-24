@@ -52,6 +52,28 @@ nav{display:flex;gap:5px;margin-top:12px;overflow:auto}nav button{background:#18
 <section id="ai" class="hidden"><h1>NALA AI Operations</h1><div id="aiGate"></div><div id="aiContent" class="hidden"><div id="aiStats" class="card"></div><h2>Decision queue</h2><div id="tasks"></div></div></section>
 </div>
 
+<style>
+#nalaBookModal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:none;align-items:center;justify-content:center;padding:18px}
+#nalaBookModal .nbm{background:#fff;color:#101828;max-width:560px;width:100%;max-height:92vh;overflow:auto;border-radius:18px;padding:20px}
+#nalaBookModal .nbm-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+#nalaBookModal .nbm-close{background:#eef2f6;color:#101828;padding:8px 11px}
+#nalaBookModal .nbm-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#nalaBookModal label{font-weight:700;font-size:13px}
+#nalaBookModal input,#nalaBookModal select{margin-top:5px}
+#nalaBookModal .nbm-total{font-size:24px;font-weight:900;margin:14px 0}
+@media(max-width:520px){#nalaBookModal .nbm-grid{grid-template-columns:1fr}}
+</style>
+<div id="nalaBookModal"><div class="nbm">
+<div class="nbm-head"><div><h2 id="nbmTitle" style="margin:0">Book your stay</h2><div id="nbmLocation" class="muted"></div></div><button class="nbm-close" onclick="closeNalaBooking()">✕</button></div>
+<div id="nbmDescription" class="muted" style="margin:14px 0"></div>
+<div class="nbm-grid">
+<div><label>Room</label><select id="nbmRoom"></select></div><div><label>Guests</label><input id="nbmGuests" type="number" min="1" value="1"></div>
+<div><label>Check-in</label><input id="nbmCheckin" type="date"></div><div><label>Nights</label><input id="nbmNights" type="number" min="1" value="1"></div>
+<div><label>Guest name</label><input id="nbmName" type="text"></div><div><label>Email</label><input id="nbmEmail" type="email" readonly></div>
+</div>
+<div class="nbm-total">Total: <span id="nbmTotal">R0.00</span></div><div id="nbmMessage" class="notice" style="display:none"></div>
+<button class="gold" style="width:100%" id="nbmConfirm" onclick="confirmNalaBooking()">Confirm booking</button>
+</div></div>
 <script>
 const SUPABASE_URL="https://pvkdgkvxzvxdaggugipx.supabase.co";
 const SUPABASE_KEY="sb_publishable_Ikq79CsbvfQmcIxdemIX_g_guw9VXC1";
@@ -155,22 +177,12 @@ async function start(){
 async function loadSettings(){try{const x=await api("nala_settings?select=*&id=eq.true&limit=1");if(x[0])settings=x[0]}catch(e){}}
 
 async function loadProperties(){
- try{properties=await api("properties?select=*&active=eq.true&approval_status=eq.approved&order=name");const q=(search.value||"").toLowerCase();const list=properties.filter(p=>(p.name+" "+p.city).toLowerCase().includes(q));cards.innerHTML=list.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><div class="muted">${esc(p.city)} · ${esc(p.type||"Stay")}</div><p>${esc(p.description||p.amenities||"Wi-Fi")}</p><p><b class="price">R${Number(p.price||0).toFixed(2)}</b> / night</p><button class="gold" onclick="book('${p.id}')">Book</button></div>`).join("")||"<div class='card'>No stays found.</div>"}catch(e){status("Connected, but properties could not load: "+e.message)}
-}
-
-async function book(propertyId){
- if(!currentUser){openAccount();return}
- const p=properties.find(x=>x.id===propertyId);if(!p)return;
- const rooms=await api("rooms?select=*&property_id=eq."+propertyId+"&active=eq.true&order=price");
- if(!rooms.length){alert("This property has no bookable rooms yet.");return}
- const room=rooms[0],name=prompt("Guest name?",currentProfile?.full_name||"");if(!name)return;
- const date=prompt("Check-in date (YYYY-MM-DD)?");if(!date)return;
- const nights=Math.max(1,Number(prompt("Number of nights?","1")||1)),guests=Math.max(1,Number(prompt("Number of guests?","1")||1));
- const total=Number(room.price)*nights;
  try{
-  const data=await api("bookings",{method:"POST",headers:{"Prefer":"return=representation"},body:JSON.stringify({property_id:propertyId,room_id:room.id,guest_id:currentUser.id,guest_name:name,guest_email:currentUser.email,check_in:date,nights,guests,total_amount:total,status:"confirmed"})});
-  alert("Booking confirmed: "+data[0].booking_ref);await loadBookings();
- }catch(e){alert("Booking failed: "+e.message)}
+  properties=await api("properties?select=*&active=eq.true&approval_status=eq.approved&order=name");
+  const q=(document.getElementById("search").value||"").toLowerCase().trim();
+  const list=properties.filter(p=>(String(p.name||"")+" "+String(p.city||"")).toLowerCase().includes(q));
+  document.getElementById("cards").innerHTML=list.length?list.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><div class="muted">${esc(p.city)} · ${esc(p.type||"Stay")}</div><p>${esc(p.description||p.amenities||"Comfortable stay")}</p><p><b class="price">R${Number(p.price||0).toFixed(2)}</b> / night</p><button class="gold" onclick="openNalaBooking('${p.id}')">View rooms & book</button></div>`).join(""):"<div class='card'>No stays found.</div>";
+ }catch(e){status("Connected, but properties could not load: "+e.message)}
 }
 
 async function loadBookings(){
@@ -326,6 +338,7 @@ refreshUser().then(start);
   setTimeout(render,1200);
   window.addEventListener("storage",()=>setTimeout(render,300));
 })();
+document.getElementById("nbmRoom")?.addEventListener("change",nalaUpdateTotal);document.getElementById("nbmNights")?.addEventListener("input",nalaUpdateTotal);
 </script>
 
 </body></html>
