@@ -231,4 +231,101 @@ async function tasksEl(){
 async function resolveTask(id,s){await api("ai_tasks?id=eq."+id,{method:"PATCH",body:JSON.stringify({status:s,resolved_at:new Date().toISOString()})});await loadAI()}
 
 refreshUser().then(start);
-</script></body></html>
+</script>
+<style>
+.nala-v1-panel{margin:18px 0;padding:18px;border:1px solid #ddd;border-radius:14px;background:#fff}
+.nala-v1-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.nala-v1-card{padding:14px;border:1px solid #e5e5e5;border-radius:12px}
+.nala-v1-card h3{margin-top:0}
+.nala-v1-small{font-size:.9em;opacity:.75}
+.nala-v1-btn{margin:4px;padding:9px 13px;border:0;border-radius:9px;cursor:pointer}
+.nala-v1-danger{font-weight:700}
+</style>
+<script>
+(function(){
+  function q(id){return document.getElementById(id)}
+  function esc2(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+  async function nalaRest(path, opts={}){
+    const token=localStorage.getItem("nala_access_token");
+    const key=typeof SUPABASE_KEY!=="undefined"?SUPABASE_KEY:"";
+    const base=typeof SUPABASE_URL!=="undefined"?SUPABASE_URL:"";
+    const headers=Object.assign({"apikey":key,"Authorization":"Bearer "+(token||key),"Content-Type":"application/json","Prefer":"return=representation"},opts.headers||{});
+    const r=await fetch(base+"/rest/v1/"+path,Object.assign({},opts,{headers}));
+    const t=await r.text(); let d=null; try{d=t?JSON.parse(t):null}catch(e){}
+    if(!r.ok) throw new Error((d&&d.message)||t||("HTTP "+r.status));
+    return d;
+  }
+  async function role(){
+    if(typeof currentUser==="undefined"||!currentUser)return null;
+    try{
+      const x=await nalaRest("nala_profiles?select=id,full_name,role&id=eq."+encodeURIComponent(currentUser.id));
+      return x&&x[0]?x[0]:null;
+    }catch(e){return null}
+  }
+  window.NALA_V1={
+    partnerApps:async function(){
+      const x=await nalaRest("nala_partner_applications?select=*&order=created_at.desc");
+      return x||[];
+    },
+    operations:async function(){
+      const x=await nalaRest("nala_operations?select=*&order=created_at.desc");
+      return x||[];
+    },
+    commission:async function(){
+      const x=await nalaRest("nala_commission_records?select=*&order=created_at.desc");
+      return x||[];
+    },
+    apply:async function(data){
+      if(typeof currentUser==="undefined"||!currentUser)throw new Error("Please sign in first.");
+      data.user_id=currentUser.id;
+      return nalaRest("nala_partner_applications",{method:"POST",body:JSON.stringify(data)});
+    },
+    approve:async function(id,status){
+      return nalaRest("nala_partner_applications?id=eq."+encodeURIComponent(id),{method:"PATCH",body:JSON.stringify({status,updated_at:new Date().toISOString()})});
+    },
+    createOperation:async function(title,description){
+      return nalaRest("nala_operations",{method:"POST",body:JSON.stringify({title,description})});
+    },
+    updateOperation:async function(id,status){
+      return nalaRest("nala_operations?id=eq."+encodeURIComponent(id),{method:"PATCH",body:JSON.stringify({status})});
+    },
+    role:role
+  };
+
+  async function render(){
+    if(typeof currentUser==="undefined"||!currentUser)return;
+    const p=await role();
+    const existing=document.getElementById("nalaV1AllInOne");
+    if(existing)existing.remove();
+    const host=document.body;
+    const el=document.createElement("div");
+    el.id="nalaV1AllInOne";
+    el.className="nala-v1-panel";
+    const r=p&&p.role?p.role:"guest";
+    el.innerHTML='<h2>NALA '+esc2(r.toUpperCase())+' CONTROL CENTER</h2>'+
+      '<div class="nala-v1-small">Full V1 operations layer</div>'+
+      '<div class="nala-v1-grid">'+
+      '<div class="nala-v1-card"><h3>🏨 Properties</h3><p>Partner applications and property onboarding.</p><button class="nala-v1-btn" id="nvApps">Open applications</button></div>'+
+      '<div class="nala-v1-card"><h3>📅 Bookings</h3><p>Use the existing NALA booking system. No existing booking tables are changed.</p></div>'+
+      '<div class="nala-v1-card"><h3>💰 Commission</h3><p>15% NALA commission records.</p><button class="nala-v1-btn" id="nvComm">View commission</button></div>'+
+      '<div class="nala-v1-card"><h3>🤖 AI Operations</h3><p>Operational tasks and decision queue.</p><button class="nala-v1-btn" id="nvOps">Open operations</button></div>'+
+      '</div><div id="nvResults"></div>';
+    host.appendChild(el);
+    q("nvApps").onclick=async()=>{const box=q("nvResults");try{
+      const a=await NALA_V1.partnerApps(); box.innerHTML='<h3>Partner Applications</h3>'+
+      (a.length?a.map(x=>'<div class="nala-v1-card"><b>'+esc2(x.property_name)+'</b><div>'+esc2(x.city)+'</div><div>Status: '+esc2(x.status)+'</div>'+
+      (r==="admin"?'<button class="nala-v1-btn" onclick="NALA_V1.approve('+x.id+',\'approved\').then(()=>location.reload())">Approve</button><button class="nala-v1-btn" onclick="NALA_V1.approve('+x.id+',\'rejected\').then(()=>location.reload())">Reject</button>':'')+
+      '</div>').join(""):"<p>No applications yet.</p>")}catch(e){box.textContent=e.message}};
+    q("nvComm").onclick=async()=>{const box=q("nvResults");try{
+      const a=await NALA_V1.commission();box.innerHTML='<h3>Commission Records</h3>'+(a.length?a.map(x=>'<div class="nala-v1-card">'+esc2(x.booking_reference)+' — '+esc2(x.commission_amount)+'</div>').join(""):"<p>No commission records yet.</p>")}catch(e){box.textContent=e.message}};
+    q("nvOps").onclick=async()=>{const box=q("nvResults");try{
+      const a=await NALA_V1.operations();box.innerHTML='<h3>Operations</h3>'+(a.length?a.map(x=>'<div class="nala-v1-card"><b>'+esc2(x.title)+'</b><div>'+esc2(x.description)+'</div><div>'+esc2(x.status)+'</div></div>').join(""):"<p>No operations yet.</p>")}catch(e){box.textContent=e.message}};
+  }
+
+  // Wait for the existing auth code to finish, then render. Re-render on storage changes.
+  setTimeout(render,1200);
+  window.addEventListener("storage",()=>setTimeout(render,300));
+})();
+</script>
+
+</body></html>
